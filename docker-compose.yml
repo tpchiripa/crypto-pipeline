@@ -1,0 +1,108 @@
+﻿version: "3.8"
+
+x-app-build: &app-build
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.1
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.6.1
+    container_name: redpanda-console
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: ${KAFKA_BOOTSTRAP}
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    container_name: crypto-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./storage/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  producer:
+    <<: *app-build
+    container_name: crypto-producer
+    command: python -m connectors.crypto_binance
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_TOPIC_RAW: ${KAFKA_TOPIC_RAW}
+      BINANCE_SYMBOLS: ${BINANCE_SYMBOLS}
+
+  normalizer:
+    <<: *app-build
+    container_name: crypto-normalizer
+    command: python -m processor.normalizer
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_TOPIC_RAW: ${KAFKA_TOPIC_RAW}
+      KAFKA_GROUP_ID: normalizer-crypto
+      DATABASE_URL: ${DATABASE_URL}
+
+  api:
+    <<: *app-build
+    container_name: crypto-api
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+
+volumes:
+  redpanda-data:
+  pg-data:
