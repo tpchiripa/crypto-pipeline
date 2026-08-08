@@ -103,6 +103,19 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: crypto-frontend
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_BASE: http://localhost:8000
+    restart: unless-stopped
+
 volumes:
   redpanda-data:
   pg-data:

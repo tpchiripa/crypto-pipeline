@@ -1,4 +1,4 @@
-"""
+﻿"""
 API layer: read-only access to normalized data for any downstream consumer
 (a dashboard, another service, a notebook, whatever).
 """
@@ -8,9 +8,17 @@ from datetime import datetime
 import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI(title="Real-Time Data Pipeline API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def get_conn():
@@ -67,6 +75,25 @@ def get_latest_trade(symbol: str):
                 (symbol.upper(),),
             )
             return cur.fetchone()
+    finally:
+        conn.close()
+
+
+@app.get("/ticker", response_model=list[Trade])
+def get_ticker():
+    """Latest trade for every symbol that has data - powers a price ticker bar."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (symbol)
+                    symbol, price, quantity, trade_time, is_buyer_maker
+                FROM crypto_trades
+                ORDER BY symbol, trade_time DESC
+                """
+            )
+            return cur.fetchall()
     finally:
         conn.close()
 
