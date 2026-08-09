@@ -2,6 +2,7 @@ import { useState } from "react";
 import TickerTape from "./components/TickerTape.jsx";
 import PriceChart from "./components/PriceChart.jsx";
 import TradeFeed from "./components/TradeFeed.jsx";
+import NewsFeed from "./components/NewsFeed.jsx";
 
 const TRACKED_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 
@@ -40,6 +41,11 @@ export default function App() {
         <PriceChart symbol={symbol} />
         <TradeFeed symbol={symbol} />
       </main>
+
+      <section className="app-section">
+        <div className="app-section-label mono">SECOND SOURCE / news, not crypto</div>
+        <NewsFeed />
+      </section>
 
       <footer className="app-footer mono">
         binance ws → kafka → postgres → fastapi → react

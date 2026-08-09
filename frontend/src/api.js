@@ -22,3 +22,7 @@ export function getTrades(symbol, limit = 40) {
 export function getSymbols() {
   return get("/symbols");
 }
+
+export function getNews(limit = 15) {
+  return get(`/news?limit=${limit}`);
+}

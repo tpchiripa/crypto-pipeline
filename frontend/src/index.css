@@ -430,3 +430,65 @@ a {
 .feed-error {
   color: var(--down);
 }
+
+/* ---------- Section divider (news, second source) ---------- */
+
+.app-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-section-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+  padding-left: 2px;
+}
+
+/* ---------- News feed ---------- */
+
+.news-feed {
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+}
+
+.news-rows {
+  overflow-y: auto;
+}
+
+.news-row {
+  display: block;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 0.15s ease;
+}
+
+.news-row:first-child {
+  border-top: none;
+}
+
+.news-row:hover {
+  background: var(--bg-panel-raised);
+}
+
+.news-title {
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+.news-row:hover .news-title {
+  color: var(--amber);
+}
+
+.news-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--ink-faint);
+}

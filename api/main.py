@@ -1,4 +1,4 @@
-﻿"""
+"""
 API layer: read-only access to normalized data for any downstream consumer
 (a dashboard, another service, a notebook, whatever).
 """
@@ -13,6 +13,9 @@ from pydantic import BaseModel
 
 app = FastAPI(title="Real-Time Data Pipeline API", version="0.1.0")
 
+# Allow the React dev server (and containerized frontend) to call this API
+# from the browser. In a real production deploy you'd lock allow_origins
+# down to your actual frontend domain instead of "*".
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,6 +34,15 @@ class Trade(BaseModel):
     quantity: float
     trade_time: datetime
     is_buyer_maker: bool
+
+
+class Article(BaseModel):
+    article_id: str
+    title: str
+    summary: str | None = None
+    link: str | None = None
+    author: str | None = None
+    received_at: datetime
 
 
 @app.get("/health")
@@ -106,5 +118,25 @@ def get_symbols():
         with conn.cursor() as cur:
             cur.execute("SELECT DISTINCT symbol FROM crypto_trades ORDER BY symbol")
             return {"symbols": [row[0] for row in cur.fetchall()]}
+    finally:
+        conn.close()
+
+
+@app.get("/news", response_model=list[Article])
+def get_news(limit: int = Query(default=20, le=100)):
+    """Latest news articles, most recent first - second source, same API shape as /trades."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT article_id, title, summary, link, author, received_at
+                FROM news_articles
+                ORDER BY received_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return cur.fetchall()
     finally:
         conn.close()
