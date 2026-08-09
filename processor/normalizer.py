@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -89,10 +90,83 @@ def parse_news_rss(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | None
         return None
 
 
+# ---- Retail CSV: this parser does actual data-quality work, not just
+# key lookups. Real POS/accounting exports are inconsistent: prices show
+# up as "$12.99", "12.99", or "12,99" depending on the till software;
+# dates show up in whatever format the exporting system defaults to.
+# The goal is to accept everything that's plausibly valid and only reject
+# rows that are genuinely unusable.
+
+_DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%dT%H:%M:%S", "%m-%d-%Y")
+
+
+def _parse_date(raw: str):
+    raw = (raw or "").strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_money(raw: str):
+    if raw is None:
+        return None
+    # Strip currency symbols, thousands separators, stray whitespace -
+    # keep digits, a single decimal point, and a leading minus sign.
+    cleaned = re.sub(r"[^\d.\-]", "", str(raw).replace(",", ""))
+    if not cleaned or cleaned in ("-", "."):
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def parse_retail_csv(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    product = (payload.get("product_name") or payload.get("product") or "").strip()
+    if not product:
+        # A row with no product name isn't a usable transaction record -
+        # this is the one thing we treat as a hard requirement.
+        logger.warning(
+            "Dropping retail row with no product name: file=%s row=%s",
+            payload.get("_source_file"), payload.get("_row_number"),
+        )
+        return None
+
+    unit_price = _parse_money(payload.get("unit_price") or payload.get("price"))
+    quantity_raw = (payload.get("quantity") or "").strip()
+    try:
+        quantity = int(float(quantity_raw)) if quantity_raw else 1
+    except ValueError:
+        quantity = 1
+
+    total = _parse_money(payload.get("total"))
+    if total is None and unit_price is not None:
+        total = round(unit_price * quantity, 2)
+
+    trade_date = _parse_date(payload.get("transaction_date") or payload.get("date") or "")
+
+    return "retail_transactions", {
+        "product_name": product,
+        "store_id": (payload.get("store_id") or "").strip() or None,
+        "quantity": quantity,
+        "unit_price": unit_price,
+        "total_amount": total,
+        "transaction_date": trade_date,
+        "payment_method": (payload.get("payment_method") or "").strip() or None,
+        "source_file": payload.get("_source_file"),
+        "source_row": payload.get("_row_number"),
+        "raw_row": json.dumps(payload),
+    }
+
+
 PARSERS: dict[str, Callable] = {
     "binance": parse_binance_trade,
     "news_rss": parse_news_rss,
-    # "pos_square": parse_pos_square,   <- next connector plugs in here
+    "retail_csv": parse_retail_csv,
+    # next connector plugs in here
 }
 
 

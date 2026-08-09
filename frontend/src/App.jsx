@@ -3,6 +3,7 @@ import TickerTape from "./components/TickerTape.jsx";
 import PriceChart from "./components/PriceChart.jsx";
 import TradeFeed from "./components/TradeFeed.jsx";
 import NewsFeed from "./components/NewsFeed.jsx";
+import RetailFeed from "./components/RetailFeed.jsx";
 
 const TRACKED_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 
@@ -43,12 +44,15 @@ export default function App() {
       </main>
 
       <section className="app-section">
-        <div className="app-section-label mono">SECOND SOURCE / news, not crypto</div>
-        <NewsFeed />
+        <div className="app-section-label mono">OTHER SOURCES / not crypto</div>
+        <div className="secondary-grid">
+          <NewsFeed />
+          <RetailFeed />
+        </div>
       </section>
 
       <footer className="app-footer mono">
-        binance ws → kafka → postgres → fastapi → react
+        binance ws + hnrss poll + csv drop → kafka → postgres → fastapi → react
       </footer>
     </div>
   );

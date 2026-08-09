@@ -107,10 +107,35 @@ services:
       NEWS_POLL_INTERVAL: ${NEWS_POLL_INTERVAL}
       METRICS_PORT: 9100
 
-  # The normalizer: consumes raw events from BOTH source topics, cleans/
-  # validates per-source, writes to Postgres. One normalizer, many sources -
-  # this is the piece that proves adding a source doesn't mean adding a
-  # whole new processing pipeline.
+  # Third connector: proves a completely different ingestion pattern -
+  # batch file drops instead of a live API. Watches a real folder on YOUR
+  # machine (bind-mounted below), so dropping a CSV into data/incoming
+  # gets picked up and ingested automatically, just like a hotel PMS or
+  # POS export landing in a folder for a real pipeline to pick up.
+  retail-producer:
+    <<: *app-build
+    container_name: crypto-retail-producer
+    command: python -m connectors.retail_csv
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "9104:9100"   # /metrics for Prometheus
+    volumes:
+      - ./data/incoming:/app/data/incoming
+      - ./data/processed:/app/data/processed
+    environment:
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_TOPIC_RAW: ${RETAIL_TOPIC_RAW}
+      RETAIL_WATCH_DIR: /app/data/incoming
+      RETAIL_PROCESSED_DIR: /app/data/processed
+      RETAIL_POLL_INTERVAL: ${RETAIL_POLL_INTERVAL}
+      METRICS_PORT: 9100
+
+  # The normalizer: consumes raw events from ALL THREE source topics,
+  # cleans/validates per-source, writes to Postgres. One normalizer, many
+  # sources - this is the piece that proves adding a source doesn't mean
+  # adding a whole new processing pipeline.
   normalizer:
     <<: *app-build
     container_name: crypto-normalizer
@@ -124,7 +149,7 @@ services:
       - "9103:9100"   # /metrics for Prometheus
     environment:
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
-      KAFKA_TOPICS_RAW: ${KAFKA_TOPIC_RAW},${NEWS_TOPIC_RAW}
+      KAFKA_TOPICS_RAW: ${KAFKA_TOPIC_RAW},${NEWS_TOPIC_RAW},${RETAIL_TOPIC_RAW}
       KAFKA_GROUP_ID: normalizer-main
       DATABASE_URL: ${DATABASE_URL}
       METRICS_PORT: 9100

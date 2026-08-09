@@ -26,3 +26,7 @@ export function getSymbols() {
 export function getNews(limit = 15) {
   return get(`/news?limit=${limit}`);
 }
+
+export function getRetailTransactions(limit = 15) {
+  return get(`/retail?limit=${limit}`);
+}

@@ -15,6 +15,12 @@ scrape_configs:
         labels:
           service: "news-producer"
 
+  - job_name: "retail-producer"
+    static_configs:
+      - targets: ["retail-producer:9100"]
+        labels:
+          service: "retail-producer"
+
   - job_name: "normalizer"
     static_configs:
       - targets: ["normalizer:9100"]

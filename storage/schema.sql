@@ -44,3 +44,28 @@ CREATE TABLE IF NOT EXISTS news_articles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_news_articles_received ON news_articles (received_at DESC);
+
+-- Third source, deliberately unlike the other two: batch file ingestion
+-- rather than a live API, and genuinely messy input. Most fields are
+-- nullable on purpose - the parser does its best to clean what it can
+-- (currency symbols, multiple date formats) but real POS/accounting
+-- exports won't always have every field, and raw_row keeps the original
+-- data around so nothing's silently lost even when a field can't be parsed.
+CREATE TABLE IF NOT EXISTS retail_transactions (
+    id                  BIGSERIAL PRIMARY KEY,
+    product_name        TEXT NOT NULL,
+    store_id            TEXT,
+    quantity            INTEGER,
+    unit_price          NUMERIC(12, 2),
+    total_amount        NUMERIC(12, 2),
+    transaction_date    TIMESTAMPTZ,
+    payment_method      TEXT,
+    source_file         TEXT,
+    source_row          INTEGER,
+    raw_row             JSONB,
+    ingested_at         TIMESTAMPTZ NOT NULL,
+    received_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_retail_transactions_date ON retail_transactions (transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_transactions_product ON retail_transactions (product_name);

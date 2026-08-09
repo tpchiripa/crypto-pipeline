@@ -50,6 +50,18 @@ class Article(BaseModel):
     received_at: datetime
 
 
+class Transaction(BaseModel):
+    product_name: str
+    store_id: str | None = None
+    quantity: int | None = None
+    unit_price: float | None = None
+    total_amount: float | None = None
+    transaction_date: datetime | None = None
+    payment_method: str | None = None
+    source_file: str | None = None
+    received_at: datetime
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -137,6 +149,27 @@ def get_news(limit: int = Query(default=20, le=100)):
                 """
                 SELECT article_id, title, summary, link, author, received_at
                 FROM news_articles
+                ORDER BY received_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+@app.get("/retail", response_model=list[Transaction])
+def get_retail_transactions(limit: int = Query(default=50, le=500)):
+    """Latest retail transactions ingested from CSV drops - third source."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT product_name, store_id, quantity, unit_price, total_amount,
+                       transaction_date, payment_method, source_file, received_at
+                FROM retail_transactions
                 ORDER BY received_at DESC
                 LIMIT %s
                 """,

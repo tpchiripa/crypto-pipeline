@@ -1,0 +1,6 @@
+product_name,store_id,quantity,unit_price,transaction_date,payment_method
+Sourdough Loaf,STORE-01,2,6.00,2026-08-10,card
+Cold Brew Can,STORE-02,12,3.20,2026-08-10,card
+Tote Bag,STORE-03,1,15.00,2026-08-10,cash
+French Press,STORE-01,1,29.99,08/10/2026,card
+Almond Croissant,STORE-01,4,4.25,2026-08-10,cash

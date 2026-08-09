@@ -492,3 +492,91 @@ a {
   font-size: 10px;
   color: var(--ink-faint);
 }
+
+/* ---------- Secondary sources grid (news + retail side by side) ---------- */
+
+.secondary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 860px) {
+  .secondary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- Retail feed ---------- */
+
+.retail-feed {
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+}
+
+.retail-header-row,
+.retail-row {
+  display: grid;
+  grid-template-columns: 1fr 40px 70px 60px;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 12px;
+  align-items: baseline;
+}
+
+.retail-header-row {
+  color: var(--ink-faint);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding-top: 10px;
+  padding-bottom: 6px;
+}
+
+.retail-header-row span:nth-child(2),
+.retail-header-row span:nth-child(3) {
+  text-align: right;
+}
+
+.retail-rows {
+  overflow-y: auto;
+}
+
+.retail-row {
+  border-top: 1px solid var(--line);
+  animation: row-in 0.3s ease;
+}
+
+.retail-row:first-child {
+  border-top: none;
+}
+
+.retail-product {
+  color: var(--ink);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.retail-store {
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+
+.retail-qty {
+  text-align: right;
+  color: var(--ink-dim);
+}
+
+.retail-total {
+  text-align: right;
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.retail-time {
+  text-align: right;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
