@@ -9,6 +9,7 @@ import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 
 app = FastAPI(title="Real-Time Data Pipeline API", version="0.1.0")
@@ -22,6 +23,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Auto-instruments every route: request count, latency, in-progress
+# requests, all exposed at /metrics for Prometheus to scrape.
+Instrumentator().instrument(app).expose(app)
 
 
 def get_conn():

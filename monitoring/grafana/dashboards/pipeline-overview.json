@@ -1,0 +1,103 @@
+{
+  "title": "Pipeline Overview",
+  "uid": "pipeline-overview",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Events Published per Source (rate/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(connector_events_published_total[1m]) * 60",
+          "legendFormat": "{{source_id}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "Normalizer: Messages Processed per Source/Table (rate/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(normalizer_messages_processed_total[1m]) * 60",
+          "legendFormat": "{{source_id}} → {{table}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "title": "Errors & Drops (rate/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(normalizer_messages_failed_total[1m]) * 60",
+          "legendFormat": "normalizer failed: {{source_id}}"
+        },
+        {
+          "expr": "rate(normalizer_messages_dropped_total[1m]) * 60",
+          "legendFormat": "normalizer dropped: {{source_id}} ({{reason}})"
+        },
+        {
+          "expr": "rate(connector_publish_errors_total[1m]) * 60",
+          "legendFormat": "connector errors: {{source_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Normalizer Processing Latency (p95, ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(normalizer_processing_seconds_bucket[1m])) * 1000",
+          "legendFormat": "{{source_id}} p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "title": "API Request Rate (per endpoint, rate/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "rate(http_requests_total[1m]) * 60",
+          "legendFormat": "{{handler}} [{{status}}]"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "title": "Seconds Since Last Event per Source",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "description": "If this climbs steadily instead of staying near zero, that source has gone quiet - a silent failure that error counts alone won't catch.",
+      "targets": [
+        {
+          "expr": "time() - connector_last_event_timestamp_seconds",
+          "legendFormat": "{{source_id}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    }
+  ]
+}

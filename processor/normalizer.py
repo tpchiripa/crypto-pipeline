@@ -13,14 +13,47 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 import psycopg2
 import psycopg2.extras
 from aiokafka import AIOKafkaConsumer
+from prometheus_client import Counter, Histogram, start_http_server
 
 logger = logging.getLogger(__name__)
+
+# ---- Metrics --------------------------------------------------------------
+# These are the signals that answer "is the pipeline actually healthy":
+# how much is flowing per source, how much is being dropped/failing, and
+# how long it takes to process a message end to end.
+
+MESSAGES_CONSUMED = Counter(
+    "normalizer_messages_consumed_total",
+    "Raw messages pulled off Kafka",
+    ["source_id"],
+)
+MESSAGES_PROCESSED = Counter(
+    "normalizer_messages_processed_total",
+    "Messages successfully parsed and written to a normalized table",
+    ["source_id", "table"],
+)
+MESSAGES_DROPPED = Counter(
+    "normalizer_messages_dropped_total",
+    "Messages dropped: no parser registered, or parser rejected the payload",
+    ["source_id", "reason"],
+)
+MESSAGES_FAILED = Counter(
+    "normalizer_messages_failed_total",
+    "Messages that raised an unexpected exception during processing",
+    ["source_id"],
+)
+PROCESSING_LATENCY = Histogram(
+    "normalizer_processing_seconds",
+    "Time to process a single message (parse + write to Postgres)",
+    ["source_id"],
+)
 
 
 # ---- Source-specific parsers -----------------------------------------
@@ -105,6 +138,10 @@ def insert_normalized(cur, table: str, row: dict, ingested_at: float) -> None:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
+    metrics_port = int(os.environ.get("METRICS_PORT", "9100"))
+    start_http_server(metrics_port)
+    logger.info("Metrics available on :%d/metrics", metrics_port)
+
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     conn.autocommit = True
 
@@ -119,9 +156,12 @@ async def main() -> None:
 
     try:
         async for msg in consumer:
+            source_id = "unknown"
+            start = time.perf_counter()
             try:
                 event = json.loads(msg.value)
                 source_id = event["source_id"]
+                MESSAGES_CONSUMED.labels(source_id=source_id).inc()
 
                 with conn.cursor() as cur:
                     insert_raw(cur, event)
@@ -129,18 +169,24 @@ async def main() -> None:
                     parser = PARSERS.get(source_id)
                     if parser is None:
                         logger.warning("No parser registered for source '%s'", source_id)
+                        MESSAGES_DROPPED.labels(source_id=source_id, reason="no_parser").inc()
                         continue
 
                     parsed = parser(event["payload"])
                     if parsed is None:
+                        MESSAGES_DROPPED.labels(source_id=source_id, reason="parse_rejected").inc()
                         continue
 
                     table, row = parsed
                     insert_normalized(cur, table, row, event["ingested_at"])
+                    MESSAGES_PROCESSED.labels(source_id=source_id, table=table).inc()
             except Exception:
                 # One bad message shouldn't take down the whole consumer -
                 # log it and keep processing the stream.
+                MESSAGES_FAILED.labels(source_id=source_id).inc()
                 logger.exception("Failed to process message, skipping")
+            finally:
+                PROCESSING_LATENCY.labels(source_id=source_id).observe(time.perf_counter() - start)
     finally:
         await consumer.stop()
         conn.close()

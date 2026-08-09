@@ -80,10 +80,13 @@ services:
     depends_on:
       redpanda:
         condition: service_healthy
+    ports:
+      - "9101:9100"   # /metrics for Prometheus
     environment:
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
       KAFKA_TOPIC_RAW: ${KAFKA_TOPIC_RAW}
       BINANCE_SYMBOLS: ${BINANCE_SYMBOLS}
+      METRICS_PORT: 9100
 
   # Second connector: proves the platform is genuinely modular, not just
   # crypto-specific. Polls an RSS feed instead of streaming a WebSocket -
@@ -95,11 +98,14 @@ services:
     depends_on:
       redpanda:
         condition: service_healthy
+    ports:
+      - "9102:9100"   # /metrics for Prometheus
     environment:
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
       KAFKA_TOPIC_RAW: ${NEWS_TOPIC_RAW}
       NEWS_FEED_URL: ${NEWS_FEED_URL}
       NEWS_POLL_INTERVAL: ${NEWS_POLL_INTERVAL}
+      METRICS_PORT: 9100
 
   # The normalizer: consumes raw events from BOTH source topics, cleans/
   # validates per-source, writes to Postgres. One normalizer, many sources -
@@ -114,11 +120,14 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    ports:
+      - "9103:9100"   # /metrics for Prometheus
     environment:
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
       KAFKA_TOPICS_RAW: ${KAFKA_TOPIC_RAW},${NEWS_TOPIC_RAW}
       KAFKA_GROUP_ID: normalizer-main
       DATABASE_URL: ${DATABASE_URL}
+      METRICS_PORT: 9100
 
   # The API layer: lets any other software query normalized data
   api:
@@ -147,6 +156,41 @@ services:
       VITE_API_BASE: http://localhost:8000
     restart: unless-stopped
 
+  # Scrapes /metrics from every Python service every 5s and stores it as
+  # time series data. This is the piece that turns "it logged something"
+  # into "I can query and graph pipeline health over time."
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: crypto-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  # Dashboards on top of Prometheus. Datasource and the pipeline dashboard
+  # are both auto-provisioned on startup - no manual clicking required.
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: crypto-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+
 volumes:
   redpanda-data:
   pg-data:
+  prometheus-data:
+  grafana-data:

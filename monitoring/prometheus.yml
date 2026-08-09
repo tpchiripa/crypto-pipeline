@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "producer"
+    static_configs:
+      - targets: ["producer:9100"]
+        labels:
+          service: "crypto-producer"
+
+  - job_name: "news-producer"
+    static_configs:
+      - targets: ["news-producer:9100"]
+        labels:
+          service: "news-producer"
+
+  - job_name: "normalizer"
+    static_configs:
+      - targets: ["normalizer:9100"]
+        labels:
+          service: "normalizer"
+
+  - job_name: "api"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          service: "api"
