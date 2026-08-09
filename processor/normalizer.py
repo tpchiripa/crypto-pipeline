@@ -41,10 +41,25 @@ def parse_binance_trade(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] |
         return None
 
 
+def parse_news_rss(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    try:
+        return "news_articles", {
+            "article_id": payload["id"],
+            "title": payload["title"],
+            "summary": payload.get("summary", ""),
+            "link": payload.get("link", ""),
+            "author": payload.get("author", ""),
+            "published_raw": payload.get("published", ""),
+        }
+    except (KeyError, TypeError) as e:
+        logger.warning("Dropping malformed news payload: %s (%s)", payload, e)
+        return None
+
+
 PARSERS: dict[str, Callable] = {
     "binance": parse_binance_trade,
-    # "news_rss": parse_news_rss,       <- future connector plugs in here
-    # "pos_square": parse_pos_square,   <- and here
+    "news_rss": parse_news_rss,
+    # "pos_square": parse_pos_square,   <- next connector plugs in here
 }
 
 
@@ -66,12 +81,21 @@ def insert_raw(cur, event: dict) -> None:
     )
 
 
+# Some tables need dedup behavior on insert (e.g. news articles can be
+# re-seen after a connector restart). Map table -> ON CONFLICT clause;
+# tables not listed here use a plain insert.
+CONFLICT_CLAUSES: dict[str, str] = {
+    "news_articles": "ON CONFLICT (article_id) DO NOTHING",
+}
+
+
 def insert_normalized(cur, table: str, row: dict, ingested_at: float) -> None:
     row = {**row, "ingested_at": datetime.fromtimestamp(ingested_at, tz=timezone.utc)}
     columns = ", ".join(row.keys())
     placeholders = ", ".join(["%s"] * len(row))
+    conflict_clause = CONFLICT_CLAUSES.get(table, "")
     cur.execute(
-        f"INSERT INTO {table} ({columns}) VALUES ({placeholders})",
+        f"INSERT INTO {table} ({columns}) VALUES ({placeholders}) {conflict_clause}",
         list(row.values()),
     )
 
@@ -85,33 +109,38 @@ async def main() -> None:
     conn.autocommit = True
 
     consumer = AIOKafkaConsumer(
-        os.environ["KAFKA_TOPIC_RAW"],
+        *os.environ["KAFKA_TOPICS_RAW"].split(","),
         bootstrap_servers=os.environ["KAFKA_BOOTSTRAP"],
         group_id=os.environ["KAFKA_GROUP_ID"],
         auto_offset_reset="earliest",
     )
     await consumer.start()
-    logger.info("Normalizer consuming from topic '%s'", os.environ["KAFKA_TOPIC_RAW"])
+    logger.info("Normalizer consuming from topics: %s", os.environ["KAFKA_TOPICS_RAW"])
 
     try:
         async for msg in consumer:
-            event = json.loads(msg.value)
-            source_id = event["source_id"]
+            try:
+                event = json.loads(msg.value)
+                source_id = event["source_id"]
 
-            with conn.cursor() as cur:
-                insert_raw(cur, event)
+                with conn.cursor() as cur:
+                    insert_raw(cur, event)
 
-                parser = PARSERS.get(source_id)
-                if parser is None:
-                    logger.warning("No parser registered for source '%s'", source_id)
-                    continue
+                    parser = PARSERS.get(source_id)
+                    if parser is None:
+                        logger.warning("No parser registered for source '%s'", source_id)
+                        continue
 
-                parsed = parser(event["payload"])
-                if parsed is None:
-                    continue
+                    parsed = parser(event["payload"])
+                    if parsed is None:
+                        continue
 
-                table, row = parsed
-                insert_normalized(cur, table, row, event["ingested_at"])
+                    table, row = parsed
+                    insert_normalized(cur, table, row, event["ingested_at"])
+            except Exception:
+                # One bad message shouldn't take down the whole consumer -
+                # log it and keep processing the stream.
+                logger.exception("Failed to process message, skipping")
     finally:
         await consumer.stop()
         conn.close()

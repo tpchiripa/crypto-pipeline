@@ -27,3 +27,20 @@ CREATE TABLE IF NOT EXISTS crypto_trades (
 );
 
 CREATE INDEX IF NOT EXISTS idx_crypto_trades_symbol_time ON crypto_trades (symbol, trade_time DESC);
+
+-- Second source, deliberately unlike crypto_trades: text content, no fixed
+-- numeric fields, dedup on a stable article id instead of accepting every
+-- message as a new fact.
+CREATE TABLE IF NOT EXISTS news_articles (
+    id              BIGSERIAL PRIMARY KEY,
+    article_id      TEXT NOT NULL UNIQUE,
+    title           TEXT NOT NULL,
+    summary         TEXT,
+    link            TEXT,
+    author          TEXT,
+    published_raw   TEXT,
+    ingested_at     TIMESTAMPTZ NOT NULL,
+    received_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_news_articles_received ON news_articles (received_at DESC);
