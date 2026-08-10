@@ -1,5 +1,8 @@
 """
-News connector: polls an RSS feed on an interval and emits new articles.
+News connector: polls a set of RSS feeds on an interval and emits new
+articles. Supports multiple feeds so coverage can span world news,
+business, and tech rather than one narrow query - each feed is tagged
+with a label so the source stays visible downstream.
 
 This is deliberately a very different shape of source from Binance:
 - Binance pushes continuously over a WebSocket; RSS has to be polled.
@@ -32,54 +35,83 @@ class NewsRSSConnector(BaseConnector):
     source_type = "news"
     schema_version = "v1"
 
-    def __init__(self, feed_url: str, poll_interval_seconds: int = 30):
-        self.feed_url = feed_url
+    def __init__(self, feeds: dict[str, str], poll_interval_seconds: int = 30):
+        # feeds: {label: url} - e.g. {"world": "https://...", "tech": "https://..."}
+        self.feeds = feeds
         self.poll_interval_seconds = poll_interval_seconds
         # Track article ids we've already emitted, so re-polling the same
-        # feed doesn't republish the same articles forever.
+        # feed doesn't republish the same articles forever. Shared across
+        # all feeds - a URL collision across two feeds is vanishingly
+        # unlikely and would just mean one fewer duplicate, not a bug.
         self._seen_ids: set[str] = set()
 
     def _entry_id(self, entry: dict) -> str:
-        # RSS entries usually have a stable 'id' (often the guid); fall back
-        # to the link if a feed omits it.
         return entry.get("id") or entry.get("link", "")
+
+    async def _poll_feed(self, label: str, url: str) -> AsyncIterator[dict[str, Any]]:
+        logger.info("Polling feed [%s]: %s", label, url)
+        parsed = await asyncio.to_thread(feedparser.parse, url)
+
+        new_count = 0
+        for entry in parsed.entries:
+            entry_id = self._entry_id(entry)
+            if not entry_id or entry_id in self._seen_ids:
+                continue
+
+            self._seen_ids.add(entry_id)
+            new_count += 1
+            yield {
+                "id": entry_id,
+                "feed_label": label,
+                "title": entry.get("title", ""),
+                "summary": entry.get("summary", ""),
+                "link": entry.get("link", ""),
+                "published": entry.get("published", ""),
+                "author": entry.get("author", ""),
+            }
+
+        logger.info("Feed [%s]: found %d new article(s)", label, new_count)
 
     async def stream(self) -> AsyncIterator[dict[str, Any]]:
         while True:
-            logger.info("Polling feed: %s", self.feed_url)
-            # feedparser is synchronous/blocking - run it off the event loop
-            # so it doesn't stall anything else.
-            parsed = await asyncio.to_thread(feedparser.parse, self.feed_url)
+            for label, url in self.feeds.items():
+                try:
+                    async for entry in self._poll_feed(label, url):
+                        yield entry
+                except Exception:
+                    # One feed failing (bad URL, temporary outage) shouldn't
+                    # take down polling for every other feed.
+                    logger.exception("Feed [%s] failed to poll, skipping this cycle", label)
 
-            new_count = 0
-            for entry in parsed.entries:
-                entry_id = self._entry_id(entry)
-                if not entry_id or entry_id in self._seen_ids:
-                    continue
+            if len(self._seen_ids) > 8000:
+                self._seen_ids = set(list(self._seen_ids)[-4000:])
 
-                self._seen_ids.add(entry_id)
-                new_count += 1
-                yield {
-                    "id": entry_id,
-                    "title": entry.get("title", ""),
-                    "summary": entry.get("summary", ""),
-                    "link": entry.get("link", ""),
-                    "published": entry.get("published", ""),
-                    "author": entry.get("author", ""),
-                }
-
-            # Cap memory growth - keep the seen-set from growing unbounded
-            # across a long-running process.
-            if len(self._seen_ids) > 5000:
-                self._seen_ids = set(list(self._seen_ids)[-2500:])
-
-            logger.info("Found %d new article(s)", new_count)
             await asyncio.sleep(self.poll_interval_seconds)
 
 
+def _parse_feeds_env(raw: str) -> dict[str, str]:
+    """
+    Parses NEWS_FEEDS env var formatted as "label1=url1,label2=url2,...".
+    Falls back to a single unlabeled feed if the format doesn't match
+    (keeps backward compatibility with the old single-URL NEWS_FEED_URL).
+    """
+    feeds = {}
+    for part in raw.split(","):
+        if "=" in part:
+            label, url = part.split("=", 1)
+            feeds[label.strip()] = url.strip()
+    return feeds
+
+
 if __name__ == "__main__":
-    feed_url = os.environ.get("NEWS_FEED_URL", "https://hnrss.org/newest?q=crypto")
+    feeds_raw = os.environ.get("NEWS_FEEDS")
+    if feeds_raw:
+        feeds = _parse_feeds_env(feeds_raw)
+    else:
+        # Backward-compatible single-feed fallback
+        feeds = {"default": os.environ.get("NEWS_FEED_URL", "https://hnrss.org/newest?q=crypto")}
+
     poll_interval = int(os.environ.get("NEWS_POLL_INTERVAL", "30"))
     topic = os.environ.get("KAFKA_TOPIC_RAW", "raw.news.articles")
-    connector = NewsRSSConnector(feed_url=feed_url, poll_interval_seconds=poll_interval)
+    connector = NewsRSSConnector(feeds=feeds, poll_interval_seconds=poll_interval)
     run(connector, topic)

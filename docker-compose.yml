@@ -89,8 +89,9 @@ services:
       METRICS_PORT: 9100
 
   # Second connector: proves the platform is genuinely modular, not just
-  # crypto-specific. Polls an RSS feed instead of streaming a WebSocket -
-  # structurally a very different source, same BaseConnector interface.
+  # crypto-specific. Polls multiple RSS feeds instead of streaming a
+  # WebSocket - structurally a very different source, same BaseConnector
+  # interface, and now genuinely global rather than one narrow query.
   news-producer:
     <<: *app-build
     container_name: crypto-news-producer
@@ -103,7 +104,7 @@ services:
     environment:
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
       KAFKA_TOPIC_RAW: ${NEWS_TOPIC_RAW}
-      NEWS_FEED_URL: ${NEWS_FEED_URL}
+      NEWS_FEEDS: ${NEWS_FEEDS}
       NEWS_POLL_INTERVAL: ${NEWS_POLL_INTERVAL}
       METRICS_PORT: 9100
 
@@ -166,6 +167,7 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
 
   # React frontend: live ticker, price chart, trade feed - consumes the API
   frontend:

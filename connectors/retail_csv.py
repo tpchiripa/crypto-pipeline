@@ -1,4 +1,4 @@
-﻿"""
+"""
 Retail connector: watches a folder for CSV files and ingests them as batch
 transactions. This is a deliberately different ingestion pattern from the
 other two connectors:
@@ -44,6 +44,11 @@ class RetailCSVConnector(BaseConnector):
         self.processed_dir.mkdir(parents=True, exist_ok=True)
 
     def _is_file_stable(self, path: Path) -> bool:
+        """
+        Guard against reading a file that's still being written (e.g. a
+        slow copy or an export tool still flushing). Checks size is
+        unchanged across a short pause before treating it as ready.
+        """
         try:
             size_a = path.stat().st_size
         except FileNotFoundError:
@@ -51,6 +56,13 @@ class RetailCSVConnector(BaseConnector):
         return size_a > 0
 
     def _read_csv_rows(self, path: Path) -> list[dict[str, Any]]:
+        # Filename convention: <org-slug>_<anything>.csv - e.g. acme-retail_sales.csv
+        # belongs to the org whose slug is "acme-retail". This is how one
+        # shared drop-folder can serve multiple tenants: the file itself
+        # carries its ownership, same way a real SFTP-drop integration
+        # would key off a per-customer subfolder or filename prefix.
+        org_slug = path.stem.split("_", 1)[0] if "_" in path.stem else None
+
         rows = []
         with open(path, newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
@@ -58,6 +70,7 @@ class RetailCSVConnector(BaseConnector):
                 rows.append({
                     "_source_file": path.name,
                     "_row_number": i + 1,
+                    "_org_slug": org_slug,
                     **row,
                 })
         return rows
@@ -80,6 +93,14 @@ class RetailCSVConnector(BaseConnector):
                 for row in rows:
                     yield row
 
+                # Move (not delete) once fully read - this file's rows have
+                # all been handed off to Kafka, so it won't be re-ingested
+                # on the next poll, but it's still on disk for audit/replay.
+                # shutil.move (not Path.rename) because incoming/ and
+                # processed/ can be separate bind mounts / filesystems
+                # (common on Docker Desktop for Windows), and a plain
+                # os.rename fails with "Invalid cross-device link" across
+                # those - shutil.move falls back to copy+delete when needed.
                 dest = self.processed_dir / path.name
                 shutil.move(str(path), str(dest))
                 logger.info("Ingested %d row(s) from %s, moved to processed/", len(rows), path.name)

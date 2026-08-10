@@ -1,3 +1,30 @@
+-- Multi-tenancy: every user belongs to exactly one organization. This is
+-- the tenant boundary - data that's genuinely private to one business
+-- (retail_transactions) gets scoped to org_id; data that's shared public
+-- fact (crypto prices, news) stays open and isn't tenant-scoped at all.
+CREATE TABLE IF NOT EXISTS organizations (
+    id          BIGSERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    slug        TEXT NOT NULL UNIQUE,
+    -- Drives which dashboard panels are relevant to this org - NOT a
+    -- security boundary (crypto/news stay public regardless), just
+    -- personalization: a retail business shouldn't have to look at a
+    -- crypto ticker it has no use for, and vice versa.
+    industry    TEXT NOT NULL DEFAULT 'general' CHECK (industry IN ('retail', 'crypto', 'general')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id              BIGSERIAL PRIMARY KEY,
+    org_id          BIGINT NOT NULL REFERENCES organizations(id),
+    email           TEXT NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'member',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_org ON users (org_id);
+
 -- Raw landing table: every event that came off Kafka, untouched.
 -- Keeping this is what lets you replay/reprocess if you fix a normalizer bug
 -- later, or add a new derived table without re-pulling from the source.
@@ -39,11 +66,13 @@ CREATE TABLE IF NOT EXISTS news_articles (
     link            TEXT,
     author          TEXT,
     published_raw   TEXT,
+    feed_source     TEXT,
     ingested_at     TIMESTAMPTZ NOT NULL,
     received_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_news_articles_received ON news_articles (received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_articles_feed ON news_articles (feed_source);
 
 -- Third source, deliberately unlike the other two: batch file ingestion
 -- rather than a live API, and genuinely messy input. Most fields are
@@ -51,8 +80,14 @@ CREATE INDEX IF NOT EXISTS idx_news_articles_received ON news_articles (received
 -- (currency symbols, multiple date formats) but real POS/accounting
 -- exports won't always have every field, and raw_row keeps the original
 -- data around so nothing's silently lost even when a field can't be parsed.
+--
+-- org_id is the tenant boundary: retail data is genuinely private to one
+-- business, unlike crypto prices or news articles which are shared public
+-- data with no meaningful notion of "ownership". Multi-tenancy belongs
+-- specifically here, not bolted onto every table for its own sake.
 CREATE TABLE IF NOT EXISTS retail_transactions (
     id                  BIGSERIAL PRIMARY KEY,
+    org_id              BIGINT REFERENCES organizations(id),
     product_name        TEXT NOT NULL,
     store_id            TEXT,
     quantity            INTEGER,
@@ -69,3 +104,4 @@ CREATE TABLE IF NOT EXISTS retail_transactions (
 
 CREATE INDEX IF NOT EXISTS idx_retail_transactions_date ON retail_transactions (transaction_date DESC);
 CREATE INDEX IF NOT EXISTS idx_retail_transactions_product ON retail_transactions (product_name);
+CREATE INDEX IF NOT EXISTS idx_retail_transactions_org ON retail_transactions (org_id, received_at DESC);

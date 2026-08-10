@@ -15,7 +15,7 @@ export default function NewsFeed() {
     <div className="panel news-feed">
       <div className="panel-header">
         <span className="panel-title">NEWS FEED</span>
-        <span className="panel-sub mono">hnrss · crypto</span>
+        <span className="panel-sub mono">global · multi-source</span>
       </div>
 
       {error && <div className="feed-error mono">feed unavailable — retrying…</div>}
@@ -31,6 +31,7 @@ export default function NewsFeed() {
           >
             <div className="news-title">{article.title}</div>
             <div className="news-meta mono">
+              {article.feed_source && <span className="news-feed-tag">{article.feed_source}</span>}
               {article.author && <span>{article.author}</span>}
               <span>{timeAgo(article.received_at)}</span>
             </div>

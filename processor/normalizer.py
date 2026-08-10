@@ -84,6 +84,7 @@ def parse_news_rss(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | None
             "link": payload.get("link", ""),
             "author": payload.get("author", ""),
             "published_raw": payload.get("published", ""),
+            "feed_source": payload.get("feed_label", "default"),
         }
     except (KeyError, TypeError) as e:
         logger.warning("Dropping malformed news payload: %s (%s)", payload, e)
@@ -158,6 +159,7 @@ def parse_retail_csv(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | No
         "payment_method": (payload.get("payment_method") or "").strip() or None,
         "source_file": payload.get("_source_file"),
         "source_row": payload.get("_row_number"),
+        "org_slug": payload.get("_org_slug"),  # resolved to org_id in main() before insert
         "raw_row": json.dumps(payload),
     }
 
@@ -168,6 +170,28 @@ PARSERS: dict[str, Callable] = {
     "retail_csv": parse_retail_csv,
     # next connector plugs in here
 }
+
+
+# ---- Tenant resolution -----------------------------------------------
+# retail_transactions rows arrive with an org_slug (from the connector's
+# filename convention), which needs to become a real org_id before insert.
+# Cached in memory since the same handful of orgs get looked up constantly
+# and organizations essentially never change mid-run.
+
+_org_slug_cache: dict[str, int | None] = {}
+
+
+def resolve_org_id(cur, org_slug: str | None) -> int | None:
+    if not org_slug:
+        return None
+    if org_slug in _org_slug_cache:
+        return _org_slug_cache[org_slug]
+
+    cur.execute("SELECT id FROM organizations WHERE slug = %s", (org_slug,))
+    row = cur.fetchone()
+    org_id = row[0] if row else None
+    _org_slug_cache[org_slug] = org_id
+    return org_id
 
 
 # ---- DB writes ----------------------------------------------------------
@@ -252,6 +276,20 @@ async def main() -> None:
                         continue
 
                     table, row = parsed
+
+                    if table == "retail_transactions":
+                        org_slug = row.pop("org_slug", None)
+                        org_id = resolve_org_id(cur, org_slug)
+                        if org_id is None:
+                            logger.warning(
+                                "Dropping retail row: unknown org slug '%s' (file=%s) - "
+                                "has that business signed up yet?",
+                                org_slug, row.get("source_file"),
+                            )
+                            MESSAGES_DROPPED.labels(source_id=source_id, reason="unknown_org").inc()
+                            continue
+                        row["org_id"] = org_id
+
                     insert_normalized(cur, table, row, event["ingested_at"])
                     MESSAGES_PROCESSED.labels(source_id=source_id, table=table).inc()
             except Exception:
