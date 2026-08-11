@@ -164,10 +164,42 @@ def parse_retail_csv(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | No
     }
 
 
+def parse_gl_import(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """
+    Stages a line item from any financial system for GL reconciliation.
+    Deliberately does NOT resolve the canonical account here - that lookup
+    needs a DB connection and org context, which parsers don't have (they
+    stay pure functions). Resolution happens in main() right before
+    insert, same pattern as retail's org_slug -> org_id.
+    """
+    category = (payload.get("category") or payload.get("account") or "").strip()
+    if not category:
+        logger.warning(
+            "Dropping GL row with no category: file=%s row=%s",
+            payload.get("_source_file"), payload.get("_row_number"),
+        )
+        return None
+
+    amount = _parse_money(payload.get("amount"))
+    txn_date = _parse_date(payload.get("date") or payload.get("transaction_date") or "")
+
+    return "gl_transactions", {
+        "source_system": (payload.get("_source_system") or "unknown").strip().lower(),
+        "source_category": category,
+        "description": (payload.get("description") or payload.get("memo") or "").strip() or None,
+        "amount": amount,
+        "transaction_date": txn_date,
+        "source_file": payload.get("_source_file"),
+        "org_slug": payload.get("_org_slug"),  # resolved to org_id in main() before insert
+        "raw_row": json.dumps(payload),
+    }
+
+
 PARSERS: dict[str, Callable] = {
     "binance": parse_binance_trade,
     "news_rss": parse_news_rss,
     "retail_csv": parse_retail_csv,
+    "gl_import": parse_gl_import,
     # next connector plugs in here
 }
 
@@ -192,6 +224,30 @@ def resolve_org_id(cur, org_slug: str | None) -> int | None:
     org_id = row[0] if row else None
     _org_slug_cache[org_slug] = org_id
     return org_id
+
+
+# GL account resolution: (org_id, source_system, source_category) -> the
+# canonical gl_account_id someone mapped it to, or None if nobody has
+# mapped this (system, category) pair for this org yet. Unmapped is a
+# normal, expected state - not an error - it just means this transaction
+# needs a human to define the mapping once, after which every future
+# transaction with that same category resolves automatically.
+_gl_mapping_cache: dict[tuple[int, str, str], int | None] = {}
+
+
+def resolve_gl_account(cur, org_id: int, source_system: str, source_category: str) -> int | None:
+    key = (org_id, source_system, source_category)
+    if key in _gl_mapping_cache:
+        return _gl_mapping_cache[key]
+
+    cur.execute(
+        "SELECT gl_account_id FROM gl_mappings WHERE org_id = %s AND source_system = %s AND source_category = %s",
+        (org_id, source_system, source_category),
+    )
+    row = cur.fetchone()
+    gl_account_id = row[0] if row else None
+    _gl_mapping_cache[key] = gl_account_id
+    return gl_account_id
 
 
 # ---- DB writes ----------------------------------------------------------
@@ -289,6 +345,34 @@ async def main() -> None:
                             MESSAGES_DROPPED.labels(source_id=source_id, reason="unknown_org").inc()
                             continue
                         row["org_id"] = org_id
+
+                    if table == "gl_transactions":
+                        org_slug = row.pop("org_slug", None)
+                        org_id = resolve_org_id(cur, org_slug)
+                        if org_id is None:
+                            logger.warning(
+                                "Dropping GL row: unknown org slug '%s' (file=%s)",
+                                org_slug, row.get("source_file"),
+                            )
+                            MESSAGES_DROPPED.labels(source_id=source_id, reason="unknown_org").inc()
+                            continue
+                        row["org_id"] = org_id
+
+                        # This is the actual reconciliation step: look up
+                        # whether someone has already mapped this system's
+                        # category to a canonical account. If not, the row
+                        # still gets stored (never silently dropped) with
+                        # canonical_gl_account_id left NULL - visible in
+                        # the API/UI as "needs mapping" rather than lost.
+                        gl_account_id = resolve_gl_account(cur, org_id, row["source_system"], row["source_category"])
+                        row["canonical_gl_account_id"] = gl_account_id
+                        if gl_account_id is None:
+                            MESSAGES_DROPPED.labels(source_id=source_id, reason="unmapped_gl_category").inc()
+                            # NOTE: this metric name is slightly misleading -
+                            # the row is NOT dropped, it's stored unmapped.
+                            # Kept under MESSAGES_DROPPED so it's visible in
+                            # the same dashboard panel as other data-quality
+                            # gaps worth a human's attention.
 
                     insert_normalized(cur, table, row, event["ingested_at"])
                     MESSAGES_PROCESSED.labels(source_id=source_id, table=table).inc()

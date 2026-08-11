@@ -105,3 +105,56 @@ CREATE TABLE IF NOT EXISTS retail_transactions (
 CREATE INDEX IF NOT EXISTS idx_retail_transactions_date ON retail_transactions (transaction_date DESC);
 CREATE INDEX IF NOT EXISTS idx_retail_transactions_product ON retail_transactions (product_name);
 CREATE INDEX IF NOT EXISTS idx_retail_transactions_org ON retail_transactions (org_id, received_at DESC);
+
+-- GL reconciliation: the canonical chart of accounts each org reports
+-- against (typically mirrors their accounting system, e.g. Xero). This is
+-- the "single source of truth" every other system's categories get
+-- translated into.
+CREATE TABLE IF NOT EXISTS gl_accounts (
+    id              BIGSERIAL PRIMARY KEY,
+    org_id          BIGINT NOT NULL REFERENCES organizations(id),
+    code            TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    account_type    TEXT NOT NULL DEFAULT 'expense' CHECK (account_type IN ('cogs', 'revenue', 'expense', 'asset', 'liability')),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (org_id, code)
+);
+
+-- The crosswalk itself: maps one source system's native category name
+-- to one canonical gl_account. This is what a human would otherwise be
+-- doing by hand every reporting period - "Dyner's 'Draft Beer' = our
+-- COGS Beverage account". Once set, every future transaction with that
+-- (source_system, source_category) pair resolves automatically.
+CREATE TABLE IF NOT EXISTS gl_mappings (
+    id                  BIGSERIAL PRIMARY KEY,
+    org_id              BIGINT NOT NULL REFERENCES organizations(id),
+    source_system       TEXT NOT NULL,   -- 'dyner' | 'lightspeed' | 'xero' | ...
+    source_category     TEXT NOT NULL,   -- that system's own label, verbatim
+    gl_account_id       BIGINT NOT NULL REFERENCES gl_accounts(id),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (org_id, source_system, source_category)
+);
+
+-- Staging table for line items from ANY connected system (ordering, POS,
+-- accounting). canonical_gl_account_id starts NULL and gets filled in by
+-- the normalizer via gl_mappings at ingest time. Rows that stay NULL are
+-- genuinely unmapped - surfaced for review rather than silently dropped
+-- or guessed at, since guessing wrong in accounting data is worse than
+-- flagging it.
+CREATE TABLE IF NOT EXISTS gl_transactions (
+    id                      BIGSERIAL PRIMARY KEY,
+    org_id                  BIGINT NOT NULL REFERENCES organizations(id),
+    source_system           TEXT NOT NULL,
+    source_category         TEXT NOT NULL,
+    canonical_gl_account_id BIGINT REFERENCES gl_accounts(id),
+    description             TEXT,
+    amount                  NUMERIC(14, 2),
+    transaction_date        TIMESTAMPTZ,
+    source_file             TEXT,
+    raw_row                 JSONB,
+    ingested_at             TIMESTAMPTZ NOT NULL,
+    received_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gl_transactions_org ON gl_transactions (org_id, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gl_transactions_unmapped ON gl_transactions (org_id) WHERE canonical_gl_account_id IS NULL;
