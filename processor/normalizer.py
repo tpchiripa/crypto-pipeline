@@ -191,6 +191,10 @@ def parse_gl_import(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | Non
         "transaction_date": txn_date,
         "source_file": payload.get("_source_file"),
         "org_slug": payload.get("_org_slug"),  # resolved to org_id in main() before insert
+        # Only meaningful for Xero: a real Xero GL export includes the
+        # account code alongside the category. Other systems won't have
+        # this, and that's fine - it's ignored for them.
+        "gl_code_hint": (payload.get("code") or payload.get("account_code") or "").strip() or None,
         "raw_row": json.dumps(payload),
     }
 
@@ -248,6 +252,58 @@ def resolve_gl_account(cur, org_id: int, source_system: str, source_category: st
     gl_account_id = row[0] if row else None
     _gl_mapping_cache[key] = gl_account_id
     return gl_account_id
+
+
+def _derive_account_type(category: str) -> str:
+    """Best-effort guess at account_type from a Xero category name, so
+    auto-seeded accounts aren't all lumped under one generic type. Not
+    perfect, but good enough to be useful - a human can always correct
+    it later via the API."""
+    c = category.lower()
+    if "cogs" in c or "cost of sales" in c:
+        return "cogs"
+    if "revenue" in c or "sales" in c and "cogs" not in c:
+        return "revenue"
+    if "asset" in c:
+        return "asset"
+    if "liabilit" in c:
+        return "liability"
+    return "expense"
+
+
+def _slugify_code(text: str) -> str:
+    import re
+    return re.sub(r"[^A-Z0-9]+", "_", text.upper()).strip("_") or "ACCT"
+
+
+# Xero is treated as the SOURCE OF TRUTH for the chart of accounts, not
+# just another system that needs mapping like Dyner/Lightspeed. A Xero
+# row auto-creates (or matches) its own canonical gl_account and links
+# itself to it directly - no human mapping step required. This is what
+# makes the dropdown for Dyner/Lightspeed pre-populate with real accounts
+# once a Xero export has been dropped once.
+_xero_account_cache: dict[tuple[int, str], int] = {}
+
+
+def upsert_xero_account(cur, org_id: int, code_hint: str | None, category: str) -> int:
+    code = code_hint or _slugify_code(category)
+    cache_key = (org_id, code)
+    if cache_key in _xero_account_cache:
+        return _xero_account_cache[cache_key]
+
+    account_type = _derive_account_type(category)
+    cur.execute(
+        """
+        INSERT INTO gl_accounts (org_id, code, name, account_type)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (org_id, code) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+        """,
+        (org_id, code, category, account_type),
+    )
+    account_id = cur.fetchone()[0]
+    _xero_account_cache[cache_key] = account_id
+    return account_id
 
 
 # ---- DB writes ----------------------------------------------------------
@@ -357,22 +413,26 @@ async def main() -> None:
                             MESSAGES_DROPPED.labels(source_id=source_id, reason="unknown_org").inc()
                             continue
                         row["org_id"] = org_id
+                        code_hint = row.pop("gl_code_hint", None)
 
-                        # This is the actual reconciliation step: look up
-                        # whether someone has already mapped this system's
-                        # category to a canonical account. If not, the row
-                        # still gets stored (never silently dropped) with
-                        # canonical_gl_account_id left NULL - visible in
-                        # the API/UI as "needs mapping" rather than lost.
-                        gl_account_id = resolve_gl_account(cur, org_id, row["source_system"], row["source_category"])
-                        row["canonical_gl_account_id"] = gl_account_id
-                        if gl_account_id is None:
-                            MESSAGES_DROPPED.labels(source_id=source_id, reason="unmapped_gl_category").inc()
-                            # NOTE: this metric name is slightly misleading -
-                            # the row is NOT dropped, it's stored unmapped.
-                            # Kept under MESSAGES_DROPPED so it's visible in
-                            # the same dashboard panel as other data-quality
-                            # gaps worth a human's attention.
+                        if row["source_system"] == "xero":
+                            # Xero is the source of truth: this row DEFINES
+                            # a canonical account rather than needing to be
+                            # matched to one. Self-resolves immediately, and
+                            # seeds gl_accounts so Dyner/Lightspeed rows have
+                            # something real to map against.
+                            gl_account_id = upsert_xero_account(cur, org_id, code_hint, row["source_category"])
+                            row["canonical_gl_account_id"] = gl_account_id
+                        else:
+                            # Every other system still needs an explicit,
+                            # human-defined mapping the first time its
+                            # category is seen. Row is stored either way -
+                            # unmapped is a visible "needs attention" state,
+                            # never a silent drop.
+                            gl_account_id = resolve_gl_account(cur, org_id, row["source_system"], row["source_category"])
+                            row["canonical_gl_account_id"] = gl_account_id
+                            if gl_account_id is None:
+                                MESSAGES_DROPPED.labels(source_id=source_id, reason="unmapped_gl_category").inc()
 
                     insert_normalized(cur, table, row, event["ingested_at"])
                     MESSAGES_PROCESSED.labels(source_id=source_id, table=table).inc()

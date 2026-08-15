@@ -1,4 +1,4 @@
-// Central place for talking to the FastAPI backend. If the API's shape
+﻿// Central place for talking to the FastAPI backend. If the API's shape
 // changes, this is the only file that should need to change.
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
@@ -29,10 +29,15 @@ async function get(path, { auth = false } = {}) {
   return res.json();
 }
 
-async function post(path, body) {
+async function post(path, body, { auth = false } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (auth) {
+    const token = getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  }
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -59,7 +64,6 @@ export function getNews(limit = 15) {
 }
 
 export function getRetailTransactions(limit = 15) {
-  // Tenant-scoped: the backend filters this to the logged-in user's org.
   return get(`/retail?limit=${limit}`, { auth: true });
 }
 
@@ -73,4 +77,30 @@ export function login(email, password) {
 
 export function getMe() {
   return get("/auth/me", { auth: true });
+}
+
+// ---- GL reconciliation ----
+
+export function getGLAccounts() {
+  return get("/gl/accounts", { auth: true });
+}
+
+export function createGLAccount(code, name, accountType) {
+  return post("/gl/accounts", { code, name, account_type: accountType }, { auth: true });
+}
+
+export function getGLMappings() {
+  return get("/gl/mappings", { auth: true });
+}
+
+export function createGLMapping(sourceSystem, sourceCategory, glAccountId) {
+  return post(
+    "/gl/mappings",
+    { source_system: sourceSystem, source_category: sourceCategory, gl_account_id: glAccountId },
+    { auth: true }
+  );
+}
+
+export function getUnmappedCategories() {
+  return get("/gl/unmapped-categories", { auth: true });
 }
