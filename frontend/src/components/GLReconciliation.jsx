@@ -1,15 +1,91 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getGLAccounts,
   createGLAccount,
   getGLMappings,
   createGLMapping,
   getUnmappedCategories,
+  uploadGLFile,
 } from "../api.js";
 
 function formatMoney(value) {
   if (value == null) return "—";
   return value.toLocaleString(undefined, { style: "currency", currency: "USD" });
+}
+
+const SOURCE_SYSTEMS = [
+  { value: "xero", label: "Xero (source of truth)" },
+  { value: "dyner", label: "Dyner" },
+  { value: "lightspeed", label: "Lightspeed" },
+  { value: "other", label: "Other" },
+];
+
+function UploadWidget({ onUploaded }) {
+  const [sourceSystem, setSourceSystem] = useState("xero");
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const fileInputRef = useRef(null);
+
+  async function handleFileChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await uploadGLFile(file, sourceSystem);
+      setResult(res);
+      onUploaded();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  return (
+    <div className="gl-upload">
+      <div className="gl-upload-controls">
+        <span className="gl-upload-label mono">THIS FILE IS FROM:</span>
+        <select
+          className="gl-input gl-input-small"
+          value={sourceSystem}
+          onChange={(e) => setSourceSystem(e.target.value)}
+        >
+          {SOURCE_SYSTEMS.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <label className="gl-btn gl-btn-primary gl-upload-btn">
+          {uploading ? "Uploading…" : "Choose CSV file"}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleFileChange}
+            disabled={uploading}
+            style={{ display: "none" }}
+          />
+        </label>
+      </div>
+
+      {error && <div className="gl-error mono">{error}</div>}
+
+      {result && (
+        <div className="gl-upload-result mono">
+          <strong>{result.filename}</strong> ({result.source_system}) — {result.rows_ingested} row(s) ingested
+          {result.auto_resolved > 0 && <> · {result.auto_resolved} auto-resolved from Xero</>}
+          {result.needs_mapping > 0 && <> · {result.needs_mapping} need mapping below</>}
+          {result.rows_skipped > 0 && <> · {result.rows_skipped} skipped (no category)</>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function NewAccountForm({ onCreated, onCancel }) {
@@ -162,6 +238,8 @@ export default function GLReconciliation() {
       </div>
 
       {error && <div className="feed-error mono">{error}</div>}
+
+      <UploadWidget onUploaded={loadAll} />
 
       <div className="gl-body">
         <div className="gl-section-label mono">NEEDS MAPPING</div>

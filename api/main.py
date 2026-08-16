@@ -2,17 +2,25 @@
 API layer: read-only access to normalized data for any downstream consumer
 (a dashboard, another service, a notebook, whatever).
 """
+import csv
+import io
+import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import psycopg2
 import psycopg2.extras
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 
 from api.auth import CurrentUser, create_access_token, get_current_user, hash_password, verify_password
+# Reused directly from the normalizer - this is the actual proof of
+# modularity: the same parsing/reconciliation logic serves both an
+# automated file-drop connector AND an interactive upload, with zero
+# duplication. One "what does this messy row mean" brain, two doors in.
+from processor.normalizer import _parse_money, _parse_date, resolve_gl_account, upsert_xero_account
 
 app = FastAPI(title="Real-Time Data Pipeline API", version="0.1.0")
 
@@ -111,6 +119,15 @@ class UnmappedCategory(BaseModel):
     source_category: str
     transaction_count: int
     total_amount: float | None = None
+
+
+class GLUploadResult(BaseModel):
+    filename: str
+    source_system: str
+    rows_ingested: int
+    rows_skipped: int
+    auto_resolved: int  # Xero rows that self-seeded an account
+    needs_mapping: int  # non-Xero rows still waiting on a human mapping
 
 
 class SignupRequest(BaseModel):
@@ -536,3 +553,97 @@ def list_unmapped_categories(current_user: CurrentUser = Depends(get_current_use
             return cur.fetchall()
     finally:
         conn.close()
+
+
+VALID_SOURCE_SYSTEMS = {"xero", "dyner", "lightspeed", "other"}
+
+
+@app.post("/gl/upload", response_model=GLUploadResult)
+def upload_gl_file(
+    file: UploadFile = File(...),
+    source_system: str = Form(...),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Explicit-source-system upload: the person uploading TELLS the system
+    what this file is, through a dropdown, rather than the system
+    inferring it from a filename nobody's forced to get right. This is
+    the trust boundary the file-drop connector doesn't have - here, the
+    org comes from the verified JWT (not a filename guess) and the source
+    system comes from an explicit choice (not a filename guess either).
+
+    Reuses the exact same parsing/reconciliation functions the automated
+    file-drop connector uses (imported from processor.normalizer) - same
+    brain, different door in. That reuse is the actual proof the platform
+    is modular: one core "make sense of messy data" layer serving two very
+    different ingestion patterns without being duplicated.
+    """
+    source_system = source_system.strip().lower()
+    if source_system not in VALID_SOURCE_SYSTEMS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"source_system must be one of {sorted(VALID_SOURCE_SYSTEMS)}",
+        )
+
+    try:
+        raw_bytes = file.file.read()
+        text = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File must be UTF-8 encoded CSV")
+
+    reader = csv.DictReader(io.StringIO(text))
+
+    ingested = skipped = auto_resolved = needs_mapping = 0
+    now = datetime.now(timezone.utc).timestamp()
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            for row in reader:
+                category = (row.get("category") or row.get("account") or "").strip()
+                if not category:
+                    skipped += 1
+                    continue
+
+                amount = _parse_money(row.get("amount"))
+                txn_date = _parse_date(row.get("date") or row.get("transaction_date") or "")
+                description = (row.get("description") or row.get("memo") or "").strip() or None
+
+                if source_system == "xero":
+                    code_hint = (row.get("code") or row.get("account_code") or "").strip() or None
+                    gl_account_id = upsert_xero_account(cur, current_user.org_id, code_hint, category)
+                    auto_resolved += 1
+                else:
+                    gl_account_id = resolve_gl_account(cur, current_user.org_id, source_system, category)
+                    if gl_account_id is None:
+                        needs_mapping += 1
+
+                cur.execute(
+                    """
+                    INSERT INTO gl_transactions
+                        (org_id, source_system, source_category, canonical_gl_account_id,
+                         description, amount, transaction_date, source_file, raw_row, ingested_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s))
+                    """,
+                    (
+                        current_user.org_id, source_system, category, gl_account_id,
+                        description, amount, txn_date, file.filename, json.dumps(row), now,
+                    ),
+                )
+                ingested += 1
+
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return GLUploadResult(
+        filename=file.filename,
+        source_system=source_system,
+        rows_ingested=ingested,
+        rows_skipped=skipped,
+        auto_resolved=auto_resolved,
+        needs_mapping=needs_mapping,
+    )

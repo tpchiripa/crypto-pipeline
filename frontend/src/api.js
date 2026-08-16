@@ -1,4 +1,4 @@
-﻿// Central place for talking to the FastAPI backend. If the API's shape
+// Central place for talking to the FastAPI backend. If the API's shape
 // changes, this is the only file that should need to change.
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
@@ -64,6 +64,7 @@ export function getNews(limit = 15) {
 }
 
 export function getRetailTransactions(limit = 15) {
+  // Tenant-scoped: the backend filters this to the logged-in user's org.
   return get(`/retail?limit=${limit}`, { auth: true });
 }
 
@@ -103,4 +104,24 @@ export function createGLMapping(sourceSystem, sourceCategory, glAccountId) {
 
 export function getUnmappedCategories() {
   return get("/gl/unmapped-categories", { auth: true });
+}
+
+export async function uploadGLFile(file, sourceSystem) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("source_system", sourceSystem);
+
+  const token = getToken();
+  const res = await fetch(`${API_BASE}/gl/upload`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    // NOTE: deliberately no Content-Type header - the browser sets the
+    // multipart boundary itself. Setting it manually breaks the upload.
+    body: formData,
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Upload failed: ${res.status}`);
+  }
+  return res.json();
 }
