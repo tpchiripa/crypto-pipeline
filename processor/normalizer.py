@@ -199,11 +199,95 @@ def parse_gl_import(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | Non
     }
 
 
+# ---- Hospitality: unit standardization -----------------------------------
+# The actual value-add here isn't reading the CSV, it's this table. Real
+# ingredient invoices are inconsistent about units - a produce supplier
+# invoices in kg, a butcher in lbs, a bar orders "each" bottle. Everything
+# maps to one canonical unit per dimension (grams for mass, ml for volume,
+# "each" for count) so a report like "total kg of beef used this month"
+# is a single honest SUM() instead of manually reconciling mixed units.
+#
+# (unit string -> (dimension, multiplier to reach the canonical unit))
+_UNIT_TABLE: dict[str, tuple[str, float]] = {
+    # mass -> grams
+    "g": ("mass", 1), "gram": ("mass", 1), "grams": ("mass", 1),
+    "kg": ("mass", 1000), "kilogram": ("mass", 1000), "kilograms": ("mass", 1000),
+    "kilo": ("mass", 1000), "kilos": ("mass", 1000),
+    "oz": ("mass", 28.3495), "ounce": ("mass", 28.3495), "ounces": ("mass", 28.3495),
+    "lb": ("mass", 453.592), "lbs": ("mass", 453.592), "pound": ("mass", 453.592), "pounds": ("mass", 453.592),
+    # volume -> ml
+    "ml": ("volume", 1), "milliliter": ("volume", 1), "milliliters": ("volume", 1), "millilitre": ("volume", 1),
+    "l": ("volume", 1000), "liter": ("volume", 1000), "liters": ("volume", 1000), "litre": ("volume", 1000), "litres": ("volume", 1000),
+    "fl oz": ("volume", 29.5735), "fl_oz": ("volume", 29.5735), "floz": ("volume", 29.5735),
+    "cup": ("volume", 236.588), "cups": ("volume", 236.588),
+    "gallon": ("volume", 3785.41), "gallons": ("volume", 3785.41), "gal": ("volume", 3785.41),
+    "pint": ("volume", 473.176), "pints": ("volume", 473.176),
+    "quart": ("volume", 946.353), "quarts": ("volume", 946.353),
+    # count -> each (no conversion, dimension is just tracked)
+    "each": ("count", 1), "ea": ("count", 1), "unit": ("count", 1), "units": ("count", 1),
+    "piece": ("count", 1), "pieces": ("count", 1), "pcs": ("count", 1), "pc": ("count", 1),
+    "bottle": ("count", 1), "bottles": ("count", 1), "can": ("count", 1), "cans": ("count", 1),
+}
+
+_CANONICAL_UNIT = {"mass": "g", "volume": "ml", "count": "each"}
+
+
+def parse_hospitality_csv(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    ingredient = (payload.get("ingredient_name") or payload.get("ingredient") or payload.get("item") or "").strip()
+    if not ingredient:
+        logger.warning(
+            "Dropping hospitality row with no ingredient name: file=%s row=%s",
+            payload.get("_source_file"), payload.get("_row_number"),
+        )
+        return None
+
+    unit_raw = (payload.get("unit") or "").strip()
+    quantity_raw = None
+    try:
+        qraw = (payload.get("quantity") or "").strip()
+        quantity_raw = float(qraw) if qraw else None
+    except ValueError:
+        quantity_raw = None
+
+    dimension, factor = _UNIT_TABLE.get(unit_raw.lower(), ("unknown", None))
+    if factor is not None and quantity_raw is not None:
+        quantity_standard = round(quantity_raw * factor, 4)
+        unit_standard = _CANONICAL_UNIT[dimension]
+    else:
+        # Unrecognized unit (a typo, a unit we haven't seen before, or a
+        # missing quantity) - store the raw value as-is rather than
+        # guessing. dimension='unknown' is a visible signal something
+        # here needs a human's attention, same philosophy as GL's
+        # unmapped-category queue.
+        quantity_standard = None
+        unit_standard = None
+        if unit_raw:
+            logger.warning("Unrecognized unit '%s' for ingredient '%s' - storing unconverted", unit_raw, ingredient)
+
+    return "hospitality_inventory", {
+        "ingredient_name": ingredient,
+        "category": (payload.get("category") or "").strip() or None,
+        "quantity_raw": quantity_raw,
+        "unit_raw": unit_raw or None,
+        "quantity_standard": quantity_standard,
+        "unit_standard": unit_standard,
+        "unit_dimension": dimension,
+        "cost": _parse_money(payload.get("cost") or payload.get("price")),
+        "supplier": (payload.get("supplier") or "").strip() or None,
+        "transaction_date": _parse_date(payload.get("date") or payload.get("transaction_date") or ""),
+        "source_file": payload.get("_source_file"),
+        "source_row": payload.get("_row_number"),
+        "org_slug": payload.get("_org_slug"),
+        "raw_row": json.dumps(payload),
+    }
+
+
 PARSERS: dict[str, Callable] = {
     "binance": parse_binance_trade,
     "news_rss": parse_news_rss,
     "retail_csv": parse_retail_csv,
     "gl_import": parse_gl_import,
+    "hospitality_csv": parse_hospitality_csv,
     # next connector plugs in here
 }
 
@@ -396,6 +480,18 @@ async def main() -> None:
                             logger.warning(
                                 "Dropping retail row: unknown org slug '%s' (file=%s) - "
                                 "has that business signed up yet?",
+                                org_slug, row.get("source_file"),
+                            )
+                            MESSAGES_DROPPED.labels(source_id=source_id, reason="unknown_org").inc()
+                            continue
+                        row["org_id"] = org_id
+
+                    if table == "hospitality_inventory":
+                        org_slug = row.pop("org_slug", None)
+                        org_id = resolve_org_id(cur, org_slug)
+                        if org_id is None:
+                            logger.warning(
+                                "Dropping hospitality row: unknown org slug '%s' (file=%s)",
                                 org_slug, row.get("source_file"),
                             )
                             MESSAGES_DROPPED.labels(source_id=source_id, reason="unknown_org").inc()

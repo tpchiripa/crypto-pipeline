@@ -158,7 +158,31 @@ services:
       GL_POLL_INTERVAL: ${GL_POLL_INTERVAL}
       METRICS_PORT: 9100
 
-  # The normalizer: consumes raw events from ALL FOUR source topics,
+  # Fifth connector: hospitality inventory. Same file-drop pattern as
+  # retail, but the real value is in the normalizer - standardizing units
+  # across suppliers who invoice in kg, lbs, gallons, or "each" so
+  # ingredient totals are actually comparable.
+  hospitality-producer:
+    <<: *app-build
+    container_name: crypto-hospitality-producer
+    command: python -m connectors.hospitality_csv
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "9106:9100"   # /metrics for Prometheus
+    volumes:
+      - ./data/hospitality_incoming:/app/data/hospitality_incoming
+      - ./data/hospitality_processed:/app/data/hospitality_processed
+    environment:
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_TOPIC_RAW: ${HOSPITALITY_TOPIC_RAW}
+      HOSPITALITY_WATCH_DIR: /app/data/hospitality_incoming
+      HOSPITALITY_PROCESSED_DIR: /app/data/hospitality_processed
+      HOSPITALITY_POLL_INTERVAL: ${HOSPITALITY_POLL_INTERVAL}
+      METRICS_PORT: 9100
+
+  # The normalizer: consumes raw events from ALL FIVE source topics,
   # cleans/validates per-source, writes to Postgres. One normalizer, many
   # sources - this is the piece that proves adding a source doesn't mean
   # adding a whole new processing pipeline.
@@ -175,7 +199,7 @@ services:
       - "9103:9100"   # /metrics for Prometheus
     environment:
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
-      KAFKA_TOPICS_RAW: ${KAFKA_TOPIC_RAW},${NEWS_TOPIC_RAW},${RETAIL_TOPIC_RAW},${GL_TOPIC_RAW}
+      KAFKA_TOPICS_RAW: ${KAFKA_TOPIC_RAW},${NEWS_TOPIC_RAW},${RETAIL_TOPIC_RAW},${GL_TOPIC_RAW},${HOSPITALITY_TOPIC_RAW}
       KAFKA_GROUP_ID: normalizer-main
       DATABASE_URL: ${DATABASE_URL}
       METRICS_PORT: 9100

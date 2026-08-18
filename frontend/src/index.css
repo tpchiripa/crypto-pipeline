@@ -503,14 +503,8 @@ a {
 
 .secondary-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
-}
-
-@media (max-width: 860px) {
-  .secondary-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* ---------- Retail feed ---------- */
@@ -917,4 +911,77 @@ a {
   font-size: 11px;
   color: var(--up);
   line-height: 1.6;
+}
+
+/* ---------- Hospitality feed ---------- */
+
+.hospitality-feed {
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+}
+
+.hosp-header-row,
+.hosp-row {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr 60px;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 12px;
+  align-items: baseline;
+}
+
+.hosp-header-row {
+  color: var(--ink-faint);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding-top: 10px;
+  padding-bottom: 6px;
+}
+
+.hosp-rows {
+  overflow-y: auto;
+}
+
+.hosp-row {
+  border-top: 1px solid var(--line);
+  animation: row-in 0.3s ease;
+}
+
+.hosp-row:first-child {
+  border-top: none;
+}
+
+.hosp-ingredient {
+  color: var(--ink);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hosp-supplier {
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+
+.hosp-raw {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+
+.hosp-standard {
+  color: var(--amber);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.hosp-unrecognized {
+  color: var(--down);
+  font-weight: 400;
+}
+
+.hosp-cost {
+  text-align: right;
+  color: var(--ink-dim);
 }

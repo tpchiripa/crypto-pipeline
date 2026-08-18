@@ -68,6 +68,10 @@ export function getRetailTransactions(limit = 15) {
   return get(`/retail?limit=${limit}`, { auth: true });
 }
 
+export function getHospitalityItems(limit = 15) {
+  return get(`/hospitality?limit=${limit}`, { auth: true });
+}
+
 export function signup(orgName, email, password, industry = "general") {
   return post("/auth/signup", { org_name: orgName, email, password, industry });
 }

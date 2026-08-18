@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS organizations (
     -- security boundary (crypto/news stay public regardless), just
     -- personalization: a retail business shouldn't have to look at a
     -- crypto ticker it has no use for, and vice versa.
-    industry    TEXT NOT NULL DEFAULT 'general' CHECK (industry IN ('retail', 'crypto', 'general')),
+    industry    TEXT NOT NULL DEFAULT 'general' CHECK (industry IN ('retail', 'hospitality', 'crypto', 'general')),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -158,3 +158,32 @@ CREATE TABLE IF NOT EXISTS gl_transactions (
 
 CREATE INDEX IF NOT EXISTS idx_gl_transactions_org ON gl_transactions (org_id, received_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gl_transactions_unmapped ON gl_transactions (org_id) WHERE canonical_gl_account_id IS NULL;
+
+-- Fifth source: hospitality ingredient/inventory data. The core problem
+-- this solves is unit inconsistency - a produce supplier invoices in kg,
+-- a butcher in lbs, a bar in "each" bottle. Both the raw values AND a
+-- standardized version are kept: raw for audit/trust, standardized so
+-- "how much beef did we use this month" is a single honest SUM() instead
+-- of a mix of incompatible units.
+CREATE TABLE IF NOT EXISTS hospitality_inventory (
+    id                  BIGSERIAL PRIMARY KEY,
+    org_id              BIGINT REFERENCES organizations(id),
+    ingredient_name     TEXT NOT NULL,
+    category            TEXT,
+    quantity_raw        NUMERIC(14, 4),
+    unit_raw            TEXT,
+    quantity_standard   NUMERIC(14, 4),
+    unit_standard       TEXT,        -- 'g' | 'ml' | 'each'
+    unit_dimension      TEXT,        -- 'mass' | 'volume' | 'count' | 'unknown'
+    cost                NUMERIC(12, 2),
+    supplier            TEXT,
+    transaction_date    TIMESTAMPTZ,
+    source_file         TEXT,
+    source_row          INTEGER,
+    raw_row             JSONB,
+    ingested_at         TIMESTAMPTZ NOT NULL,
+    received_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_hospitality_org ON hospitality_inventory (org_id, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hospitality_ingredient ON hospitality_inventory (ingredient_name);

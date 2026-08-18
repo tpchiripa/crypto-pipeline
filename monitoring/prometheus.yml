@@ -27,6 +27,12 @@ scrape_configs:
         labels:
           service: "gl-producer"
 
+  - job_name: "hospitality-producer"
+    static_configs:
+      - targets: ["hospitality-producer:9100"]
+        labels:
+          service: "hospitality-producer"
+
   - job_name: "normalizer"
     static_configs:
       - targets: ["normalizer:9100"]

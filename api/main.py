@@ -73,6 +73,21 @@ class Transaction(BaseModel):
     received_at: datetime
 
 
+class HospitalityItem(BaseModel):
+    ingredient_name: str
+    category: str | None = None
+    quantity_raw: float | None = None
+    unit_raw: str | None = None
+    quantity_standard: float | None = None
+    unit_standard: str | None = None
+    unit_dimension: str | None = None
+    cost: float | None = None
+    supplier: str | None = None
+    transaction_date: datetime | None = None
+    source_file: str | None = None
+    received_at: datetime
+
+
 class GLAccount(BaseModel):
     id: int
     code: str
@@ -175,7 +190,7 @@ def signup(payload: SignupRequest):
     unique slug derived from its name; a numeric suffix is appended if
     that slug's already taken.
     """
-    if payload.industry not in ("retail", "crypto", "general"):
+    if payload.industry not in ("retail", "hospitality", "crypto", "general"):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid industry")
 
     conn = get_conn()
@@ -378,6 +393,32 @@ def get_retail_transactions(
                 SELECT product_name, store_id, quantity, unit_price, total_amount,
                        transaction_date, payment_method, source_file, received_at
                 FROM retail_transactions
+                WHERE org_id = %s
+                ORDER BY received_at DESC
+                LIMIT %s
+                """,
+                (current_user.org_id, limit),
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+@app.get("/hospitality", response_model=list[HospitalityItem])
+def get_hospitality_items(
+    limit: int = Query(default=50, le=500),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Latest hospitality inventory items - includes both raw and unit-standardized quantities."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT ingredient_name, category, quantity_raw, unit_raw,
+                       quantity_standard, unit_standard, unit_dimension,
+                       cost, supplier, transaction_date, source_file, received_at
+                FROM hospitality_inventory
                 WHERE org_id = %s
                 ORDER BY received_at DESC
                 LIMIT %s

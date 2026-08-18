@@ -1,0 +1,11 @@
+ingredient_name,category,quantity,unit,cost,supplier,date
+Beef Chuck,Meat,5,kg,45.00,ButcherCo,2026-08-10
+Beef Chuck,Meat,11,lbs,48.00,Wholesale Meats Inc,2026-08-10
+Chicken Breast,Meat,8,kg,32.00,ButcherCo,2026-08-10
+Tomatoes,Produce,10,kg,18.50,Farm Fresh,2026-08-10
+Tomatoes,Produce,15,lbs,20.00,City Produce,2026-08-10
+Vodka,Beverage,1,gallon,60.00,Beverage Distributors,2026-08-10
+House Red Wine,Beverage,12,bottles,180.00,Wine Merchants,2026-08-10
+Olive Oil,Pantry,2,l,24.00,Mediterranean Imports,2026-08-10
+Flour,Pantry,25,kg,15.00,Bulk Supply Co,2026-08-10
+Mystery Spice Mix,Pantry,3,crates,20.00,Unknown Supplier,2026-08-10

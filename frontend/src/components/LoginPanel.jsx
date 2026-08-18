@@ -3,6 +3,7 @@ import { login, signup, setToken } from "../api.js";
 
 const INDUSTRIES = [
   { value: "retail", label: "Retail business" },
+  { value: "hospitality", label: "Hospitality / food service" },
   { value: "crypto", label: "Crypto trading" },
   { value: "general", label: "General / see everything" },
 ];
